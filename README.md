@@ -8,332 +8,151 @@ Empat repo, dijalankan jadi satu stack dengan Docker Compose.
 
 ## 1. Fitur utama
 
-**Tiga deteksi**
+ThreatLens menjawab satu pertanyaan: apakah pihak yang baru menghubungi kita itu penipu. Jawaban datang dari tiga jalur yang berbeda, yaitu mesin pemeriksa, laporan warga, dan keputusan moderator. Ketiganya ditampilkan terpisah agar pengguna tahu bagian mana yang merupakan hasil pengukuran dan bagian mana yang masih dugaan.
 
-| Deteksi | Cara kerja |
-|---|---|
-| Tautan (`/recognize` → tab Tautan) | Chromium terisolasi membuka halaman, membandingkan host awal vs akhir setelah redirect, membaca form action lintas-domain, lalu menggabungkannya dengan reputasi URL (Safe Browsing, VirusTotal, IC4, Malwarebytes). Hasilnya ada di alamat sendiri: `/recognize/url/<scan_id>`. |
-| Aplikasi APK | Hash SHA-256 + pemeriksaan statis (Androguard) di container tanpa akses internet: izin, kemampuan SMS/accessibility/overlay-install, token bot Telegram tertanam, launcher tersembunyi, petunjuk packer, dan pre-check zip-bomb. APK tidak pernah dieksekusi. Hasil di `/recognize/apk/<scan_id>`. |
-| Nomor telepon | Normalisasi E.164 (hanya `+62`), deteksi nomor premium, lalu digabung dengan laporan warga. Halaman hasil: `/recognize/phone/<nomor>`, termasuk bagian "Kata warga". |
-
-**Domain mirip brand (lookalike).** 80 brand Indonesia (bank, e-wallet, e-commerce, logistik) + layanan global dicocokkan secara deterministik dan offline: substitusi karakter (`g00gle.com`), typosquatting (`goggle.com`), homograph/punycode, brand disisipkan (`bca-login.xyz`), brand di bawah domain lain (`google.com.secure-login.xyz`). Hasilnya maksimal `suspicious` — kemiripan nama bukan bukti halaman berbahaya.
-
-**Papan cerita warga (`/community`).** Tiga tab beralamat sendiri — `/community/latest`, `/community/popular`, `/community/phone`. Penulis dapat menceritakan pengalaman atas satu nomor `+62` dengan gambar bukti wajib; identitas tampil sebagai alias (`Warga-a1b2c3`), bukan nama asli. Vote hanya mengubah urutan feed, tidak pernah mengubah risiko sebuah nomor.
-
-**Laporan nomor berbahaya.** Satu laporan per akun per nomor, kategori tetap lima, gambar bukti wajib dan diverifikasi dari magic byte. Sebuah nomor baru masuk daftar "Nomor berbahaya" setelah **satu laporan disetujui moderator** — ambangnya adalah keputusan manusia yang membaca laporan dan screenshot-nya, bukan jumlah kepala.
-
-**Meja moderasi (`/admin`).** Pintunya `/admin/login` (email + password). Setelah masuk:
-- `/admin/dasbor` — jumlah akun, laporan, cerita, dan nomor berbeda dilaporkan; grafik garis pertumbuhan untuk angka yang dipilih; donut kategori laporan; filter 7 hari / 1 bulan / 3 bulan / 1 tahun.
-- `/admin/laporan` — antrean laporan nomor, setujui / tolak / tandai spam.
-- `/admin/posting` — antrean cerita warga, turunkan cerita.
-
-**Verdict bisa dibaca.** Level risiko tidak pernah berbohong: kalau ada pemeriksaan yang gagal dijalankan, itu muncul sebagai `checks_unavailable` di halaman hasil, bukan diam-diam dianggap bersih. Klaim berisiko tinggi dari model saja tidak cukup — butuh sumber kedua yang bukan model.
-
-**Keamanan.** CSP + HSTS + `nosniff` + `frame-ancestors 'none'`, browser scan hanya bisa keluar lewat proxy DNS-pinning (port 80/443), worker APK read-only tanpa rute internet, log meredam API key/JWT/DSN, sesi idle 1 jam keluar sendiri, ikon dibundel offline (tidak ada fetch ke API pihak ketiga).
-
----
-
-## 2. Yang perlu kamu siapkan
-
-Ini **bukan** stack yang bisa jalan sepenuhnya offline. Kodenya jalan di laptopmu, tapi lima layanan luar ikut dibutuhkan:
-
-| Layanan | Untuk apa | Wajib? |
+| Rute | Isi | Butuh login |
 |---|---|---|
-| **Supabase** (project hosted) | Database, auth, Storage | Ya — tanpa ini tidak ada yang jalan |
-| **OpenAI** | Agen pemeriksa tautan/APK | Ya, untuk deteksi |
-| **Cloudflare Turnstile** | Anti-bot di form login | Ya, untuk login |
-| **Google OAuth** | Login warga | Ya, kalau mau login |
-| **Cloudinary** | Penyimpanan gambar bukti laporan & cerita | Ya, kalau mau melapor/m posting |
-| Safe Browsing, VirusTotal, IC4, Malwarebytes, Exa, MobSF, sandbox dinamis | Sumber reputasi tambahan | Tidak — yang tidak diset hanya dilaporkan sebagai "belum diperiksa" |
+| `/` | Halaman publik: bagian pembuka dengan kartu periksa, daftar modus penipuan, dan bagian peringatan | Tidak |
+| `/recognize` | Tiga tab pemeriksaan: Tautan, Telepon, APK | Ya |
+| `/recognize/url/<scan_id>`, `/recognize/apk/<scan_id>` | Halaman hasil untuk satu pemeriksaan. Bisa disimpan, dibuka lagi, dan dibagikan | Ya |
+| `/recognize/phone/<nomor>` | Halaman hasil pemeriksaan nomor, termasuk bagian "Kata warga" | Ya |
+| `/history` | Daftar pemeriksaan terakhir, setiap baris menaut ke halaman hasilnya | Ya |
+| `/learn`, `/learn/<id>` | Modul edukasi berupa simulasi percakapan penipuan | Ya |
+| `/guide` | Panduan darurat: langkah 15 menit, nomor call center bank, hotline resmi | Ya |
+| `/community/latest`, `/community/popular`, `/community/phone` | Papan cerita warga | Ya |
+| `/admin/login`, lalu `/admin/dasbor`, `/admin/laporan`, `/admin/posting` | Meja moderasi | Akun admin |
 
-**Perangkat di laptopmu:** Docker Desktop (status *Running*) dan Git. Untuk menjalankan tes tanpa container, tambahkan Node.js 20+, Go 1.23+, dan Python 3.10+.
+### 1.1 Tiga jenis pemeriksaan
 
----
+**Tautan.** Halaman dibuka dengan Chromium di dalam worker terpisah, jadi yang dinilai adalah halaman yang benar-benar tampil, bukan perkiraan dari teks URL. Yang dibandingkan adalah host awal dengan host akhir setelah redirect, action form yang menuju domain lain, halaman yang memakai nama brand di bawah domain asing, dan metadata halaman. Temuan tersebut digabung dengan reputasi eksternal (Google Safe Browsing, VirusTotal, IC4, Malwarebytes) lalu dibaca agen LLM dengan batas tetap: dua ronde panggilan tool dan maksimal enam tool yang benar-benar dieksekusi untuk satu pemeriksaan. Jika redirect berpindah domain, dilakukan satu pemeriksaan tambahan ke tujuan tersebut dan ke action form lintas domain, maksimal dua target, tanpa membuka sesi browser kedua.
 
-## 3. Ambil kodenya
+**APK.** Berkas diperiksa secara statis dan tidak pernah dijalankan. Pertama dihitung SHA-256-nya, lalu reputasi hash ditanyakan ke VirusTotal, itu pun hanya jika pengguna mencentang izin unggah ke layanan eksternal. Sebelum isi arsip dibongkar, dijalankan pemeriksaan zip-bomb: jumlah entri, ukuran tiap entri, total ukuran setelah解压, dan rasio kompresi. Setelah itu Androguard mengambil izin dan kode, dan aturan deterministik menggabungkannya, antara lain izin SMS yang berdampingan dengan aksesibilitas atau kemampuan instalasi overlay, token bot Telegram yang tertanam di berkas, ikon launcher yang disembunyikan, dan petunjuk penggunaan packer. Nama paket dan domain yang tertulis di dalam APK ikut dibandingkan dengan daftar brand resmi.
 
-Keempat repo harus **sejajar** di dalam satu folder induk — bukan bersarang, bukan submodule. Compose memakai path `../frontend`, `../backend`, `../analysis-service`, jadi posisi folder menentukan.
+**Nomor telepon.** Hanya nomor Indonesia yang dilayani. Normalisasi ke E.164 dilakukan satu kali oleh Python; Go API menyimpan hasil hitung tersebut dan tidak menyalin aturannya sendiri. Angka `0` setelah `62` dibuang di ketiga bahasa, sehingga `0812…`, `62812…`, dan `+62 0812…` menunjuk ke alamat yang sama. Pemeriksaan melihat bentuk nomor premium seperti 0900, yang biasa dipakai pada modus telepon tak dikenal yang menagih, lalu mengambil laporan warga atas nomor tersebut. Bagian "Kata warga" menampilkan kategori, status, dan umur laporan, maksimal 20 entri, tanpa menampilkan identitas pelapor.
 
-```bash
-mkdir mitweek && cd mitweek
+Pemeriksaan nomor tidak pernah menyimpulkan sebuah nomor aman. Tidak ada dasar data resmi untuk menyatakan nomor perorangan bersih, jadi yang dilaporkan hanya apa yang sudah dinyatakan orang lain tentang nomor itu.
 
-git clone https://github.com/MITWEEK-inponamatim/infra.git
-git clone https://github.com/MITWEEK-inponamatim/frontend.git
-git clone https://github.com/MITWEEK-inponamatim/backend.git
-git clone https://github.com/MITWEEK-inponamatim/analysis-service.git
-```
+### 1.2 Cara vonis ditetapkan
 
-Hasilnya harus begini:
+Bagian ini yang paling sering membuat produk sejenis kehilangan kepercayaan, yaitu quando mesin menyatakan aman tanpa bukti.
 
-```text
-mitweek/
-├── infra/              # compose, migrasi Supabase, dokumentasi
-├── frontend/           # Next.js 16 + React 19
-├── backend/            # Go API
-└── analysis-service/   # Python: agen deteksi, LangGraph, worker browser/APK
-```
+| Vonis | Kondisi | Tindakan yang disarankan |
+|---|---|---|
+| **BERBAHAYA** (`confirmed_threat`, level tinggi) | Satu sumber reputasi independen menyatakan berbahaya | Jangan buka tautan dan jangan berikan data apa pun. Blokir dan laporkan |
+| **WASPADA** (`suspicious`, level tinggi) | Temuan tinggi yang didukung sumber non-model, atau beberapa temuan sedang | Jangan masukkan kredensial. Verifikasi lewat kanal resmi |
+| **WASPADA** (`suspicious`, level sedang) | Ada temuan sedang, belum cukup untuk naik level | Verifikasi sebelum bertindak |
+| **AMAN** (`low`) | Minimal dua sumber independen yang检查结果 bersih dan tidak ada temuan sedang ke atas | Tidak ada sinyal bahaya, tetapi tetap berhati-hati |
+| **BUKTI BELUM CUKUP** (`insufficient_evidence`, level `unknown`) | Selain kondisi di atas | Jangan ambil kesimpulan |
 
----
+Empat aturan menjaga tabel di atas:
 
-## 4. Buat file `.env`
+1. **Klaim dari model tidak berdiri sendiri.** Agen LLM hampir selalu menemukan sesuatu yang terdengar mengkhawatirkan. Jika level tinggi hanya dinyatakan model dan tidak ada sumber lain dengan severity sedang ke atas, vonis ditahan pada WASPADA dan skornya dipotong maksimal 69. Alasan pemotongan ditampilkan di halaman hasil.
+2. **Vonis aman butuh bukti, bukan sekadar tidak ada temuan.** Skor rendah tidak membuat sesuatu menjadi AMAN. Harus ada minimal dua pemeriksaan yang benar-benar selesai dan hasilnya bersih.
+3. **Satu sumber tidak boleh menyimpulkan.** Jika pemeriksaan positif yang berhasil dijalankan kurang dari dua, skor dikunci di 60.
+4. **Pemeriksaan yang gagal selalu diberitahu.** Setiap pemeriksaan yang tidak selesai, karena kuota habis, timeout, HTTP 429, atau layanannya belum dikonfigurasi, masuk ke `checks_unavailable` dan tampil di halaman hasil. Pengguna tidak pernah melihat kata bersih dari pemeriksaan yang sebenarnya tidak jalan.
 
-Ada empat file contoh. `docker compose` **gagal lebih dulu** kalau salah satu file `.env` belum ada, jadi buat semuanya sebelum menjalankan.
+Skor 0 sampai 100 dihitung dengan kalibrasi. Tiap temuan memberi bobot severity dikali bobot sumber dikali tingkat keyakinan, dan bukti dari sumber independen digabungkan secara multiplikatif. Beberapa temuan sedang bisa menaikkan skor, sementara satu temuan lemah dari model tidak dapat menghasilkan angka tinggi sendirian.
 
-```bash
-cp frontend/.env.example        frontend/.env
-cp backend/.env.example         backend/.env
-cp analysis-service/.env.example analysis-service/.env
-cp infra/supabase/.env.example  infra/supabase/.env
-```
+### 1.3 Pendeteksi domain mirip brand
 
-Semua `.env` sudah di-ignore Git. Jangan pernah commit nilai aslinya — yang di-commit hanya `.env.example`.
+`brand_guard.py` membandingkan setiap host dengan 80 brand resmi pada `app/data/brands.json`, mencakup bank dan e-wallet Indonesia, e-commerce, layanan logistik, serta beberapa layanan global. Pencocokan bersifat deterministik dan offline, tanpa panggilan jaringan.
 
-### `frontend/.env`
+| Teknik | Contoh | Level |
+|---|---|---|
+| Substitusi karakter | `g00gle.com`, `paypa1.com` | tinggi |
+| Typosquatting | `goggle.com`, `gooogle.com` | tinggi |
+| Homograph dan punycode | `xn--80ak6aa92e.com`, `gооgle.com` | tinggi |
+| Nama brand disisipkan | `bca-login.xyz`, `shopee-promo.click` | tinggi |
+| Brand di bawah domain lain | `google.com.secure-login.xyz` | tinggi |
+| Brand sebagai subdomain | `login.google.security-check.xyz` | sedang |
+| Brand di TLD lain | `bca.com` | sedang |
 
-| Variabel | Nilai |
+Yang diperiksa adalah host awal, host akhir setelah redirect, domain action form, dan domain yang tertulis di dalam APK. Domain resmi seperti `bca.co.id` dan `mail.google.com` tidak ditandai. Daftar brand dapat diganti melalui `BRAND_ALLOWLIST_PATH` tanpa mengubah kode.
+
+Catatan yang ditulis di antarmuka, bukan hanya di dokumen: yang dideteksi adalah kemiripan nama, bukan bukti bahwa halaman tersebut berbahaya. Phishing yang dipasang di layanan resmi dan domain acak tanpa kemiripan brand tidak tertangkap di bagian ini.
+
+### 1.4 Papan cerita warga
+
+Papan di `/community` dipakai warga menceritakan pengalaman atas satu nomor `+62`. Susunannya mengikuti feed foto, bukan halaman produk.
+
+- Tiga tab punya alamat sendiri: `/community/latest` (Terbaru), `/community/popular` (Terpopuler), dan `/community/phone` (Nomor berbahaya). `/community` meneruskan ke `latest` dan tetap membawa `?nomor=`. Pemisahan ini dibuat karena tab yang dimaksudkan untuk dibagikan atau dibuka kembali esok hari harus bisa ditunjuk sebuah tautan.
+- Nomor adalah penanda utama, bukan penulisnya. Setiap baris diawali nomor `+62 812-3456-7890` dalam cetak tebal yang menaut ke halaman nomor tersebut. Identitas penulis tampil sebagai alias `Warga-a1b2c3`, yaitu enam karakter pertama HMAC dari user id; id aslinya tidak pernah dikirim ke browser.
+- Gambar bukti wajib untuk setiap cerita, disimpan lewat jalur yang sama dengan laporan nomor.
+- Vote hanya mengubah urutan feed. Satu akun punya satu suara per cerita, berupa berguna, tidak berguna, atau cabut suara. Vote tidak memengaruhi risiko, level, maupun daftar Nomor berbahaya, karena jika ikut menghitung, daftar itu bisa dimenangkan oleh siapa pun dengan banyak akun.
+- Komentar dua tingkat. Balasan ke balasan ditolak dengan `reply_too_deep`, dan komentar induk harus berada di cerita yang sama.
+- Pemilik dapat menghapus cerita atau komentarnya sendiri secara permanen, tanpa arsip dan tanpa salinan. Balasan merupakan anak dari komentarnya, sehingga ikut terhapus, termasuk balasan dari akun lain. Karena itu tampilan konfirmasi menjelaskannya sebelum tindakan, bukan sesudah. Moderator menurunkan cerita, tidak menghapus tulisan penulisnya.
+- Cerita warga bukan bukti dan bukan vonis. Satu cerita yang benar atas sebuah nomor belum tentu tentang orang yang sama, karena nomor bisa dipalsukan dan bisa berpindah pemilik. Tidak ada cerita yang dapat menaikkan risiko sebuah nomor.
+
+Batas penulisan: enam cerita per jam, lima komentar per menit, dua puluh komentar per jam, tiga puluh vote per menit.
+
+### 1.5 Laporan nomor berbahaya
+
+Jalur ini adalah satu-satunya yang dapat menempatkan sebuah nomor ke daftar berbahaya.
+
+- Gambar bukti wajib, satu berkas per laporan, maksimal 5 MB. Tipe dibaca dari magic byte, bukan dari ekstensi: `png`, `jpeg`, `webp`, `heic`, dan `heif` diterima; `gif` dan berkas non-gambar ditolak.
+- Jika penyimpanan bukti gagal, laporan ditolak dengan `503` dan tidak ada baris database yang dibuat. Aturan bukti wajib tidak boleh melonggar menjadi sekadar anjuran.
+- Satu laporan per akun per nomor. Laporan kedua atas nomor yang sama dijawab `409 duplicate_report`, sehingga satu orang tidak dapat membuat sebuah nomor tampak dilaporkan banyak orang.
+- Semua laporan mulai pada status `pending`. Sebuah klaim tidak menaikkan risiko sampai moderator membaca laporannya beserta gambarnya.
+- Nomor masuk daftar berbahaya setelah satu laporan disetujui. Yang menjadi ambang adalah keputusan manusia yang memeriksa bukti, bukan jumlah pelapor. Pelapor tidak dapat menaikkan laporannya sendiri, dan warga yang benar tidak perlu menunggu orang asing kedua kebetulan melaporkan nomor yang sama.
+- Kolom catatan untuk pelapor dibatasi 280 karakter dan hanya dibaca moderator. Isinya tidak dikirim ke LLM dan tidak ditampilkan ke pengguna lain.
+- Berkti disimpan pada folder dengan akhiran acak, sehingga URL bukti tidak dapat dijelajahi. Penghapusan memanggil CDN invalidate; secara terukur URL yang sama berubah menjadi 404 dalam 30 detik.
+
+Batas penulisan: sepuluh laporan per jam per akun.
+
+### 1.6 Modul edukasi
+
+Delapan simulasi percakapan penipuan tersedia di `/learn`. Setiap skenario dibuka sebagai percakapan dengan tampilan pesan instan: gelembung pesan, header, bilah input, latar coretan, dan lampiran yang dapat disentuh langsung. Pilihannya bercabang, pihak lawan memberi reaksi atas balasan yang dipilih, dan tiap keputusan dinilai.
+
+| Skenario | Modus yang dilatih |
 |---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | URL project Supabase-mu |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | publishable key (`sb_publishable_…`) |
-| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | site key Turnstile |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8080` |
-| `NEXT_PUBLIC_IDLE_TIMEOUT_SECONDS` | `3600` |
+| Percakapan dengan Kurir J&T Palsu | Lampiran APK berkedok resi paket; berkas APK-nya benar-benar tampil sebagai lampiran di gelembung pesan |
+| Panggilan CS Bank BCA Palsu | Perubahan tarif yang meminta pengguna pindah ke kanal resmi palsu |
+| Undangan Pernikahan Teman Lama | Tautan undangan yang meminta nomor dan kode verifikasi |
+| Teror Salah Transfer Pinjol Ilegal | Utang fiktif disertai ancaman menyebarkan data |
+| Pemberitahuan Surat Tilang ETLE | Denda palsu dengan tautan pembayaran |
+| Wawancara Kerja Freelance Bodong | Pekerjaan yang meminta biaya lebih dahulu |
+| Pemenang Undian Belanja Marketplace | Hadiah yang meminta pajak sebelum dicairkan |
+| Titip Dana Trading Kripto Bodong | Janji imbal hasil dan dana yang tidak kembali |
 
-### `backend/.env`
+Setelah percakapan selesai, muncul lembar bedah forensik yang menjelaskan taktik apa yang dipakai penipu pada setiap pesan, panel telemetri yang memperlihatkan data apa yang bocor dari pilihan pengguna, dan skor 0 sampai 100. Rekor tiap skenario disimpan di perangkat, sehingga skenario dengan skor rendah dapat diulang. Tujuannya bukan menghafal jawaban yang benar, melainkan mengenali polanya ketika percakapan serupa terjadi sungguhan.
 
-| Variabel | Nilai |
-|---|---|
-| `SUPABASE_URL` | sama seperti di frontend |
-| `SUPABASE_PUBLISHABLE_KEY` / `SUPABASE_SECRET_KEY` / `SUPABASE_JWT_SECRET` | dari Supabase → Settings → API |
-| `TURNSTILE_SECRET_KEY` | secret key Turnstile |
-| `TURNSTILE_EXPECTED_HOSTNAME` | `localhost` |
-| `SERVICE_API_KEY` | bebas, asal panjang — **wajib identik** dengan di `analysis-service/.env` |
-| `PRE_COOKIE_SECRET` | bebas, asal panjang (dipakai untuk alias penulis) |
-| `DATABASE_URL` | **boleh kosong.** Kalau terisi, Go baca Postgres langsung lewat pgx; kalau kosong, lewat PostgREST. Keduanya jalan |
-| Sisanya | punya default di kode, biarkan seperti contoh |
+### 1.7 Panduan darurat
 
-### `analysis-service/.env`
+Halaman `/guide` ditujukan untuk orang yang sedang mengalami penipuan, jadi isinya tindakan beserta nomor yang benar, bukan penjelasan umum.
 
-| Variabel | Nilai |
-|---|---|
-| `SUPABASE_URL` / `SUPABASE_SECRET_KEY` | sama seperti di backend |
-| `SERVICE_API_KEY` | **sama persis** dengan backend |
-| `OPENAI_API_KEY` + `OPENAI_MODEL` | kunci agen |
-| `CLOUDINARY_URL` + `CLOUDINARY_CLOUD_NAME` | lihat catatan Cloudinary di §8 |
-| `DATABASE_URL_SESSION` | kolom `connectionString` Supabase → Settings → Database. Kosong pun jalan, hanya checkpoint LangGraph dilaporkan tidak tersedia |
-| `SAFE_BROWSING_API_KEY`, `VIRUSTOTAL_API_KEY`, `EXA_API_KEY`, `MOBSF_URL`, `MOBSF_API_KEY`, `DYNAMIC_ANALYSIS_URL` | opsional; kalau kosong, hasilnya muncul sebagai "pemeriksaan tidak tersedia" |
+**Checklist 15 menit**, dibagi dalam empat fase dengan langkah yang dapat dicentang.
 
-### `infra/supabase/.env`
+- Fase 1, menit 0 sampai 5: hubungi call center bank untuk memblokir rekening dan m-banking, minta pemblokiran rekening penampung tujuan transfer, lalu catat nomor tiket pengaduan resmi dari bank.
+- Fase 2, menit 5 sampai 10: aktifkan mode pesawat dan matikan Wi-Fi, cabut izin aksesibilitas, hapus berkas APK trojan dari ponsel.
+- Fase 3, menit 10 sampai 15: ganti kata sandi email utama dari perangkat lain yang bersih, lakukan logout pada semua sesi, pindahkan 2FA ke aplikasi authenticator dan tinggalkan SMS.
+- Fase 4: ekspor dan amankan seluruh bukti digital berupa tangkapan layar dan mutasi rekening, buat laporan polisi resmi di SPKT atau Patroli Siber Polri, lalu laporkan nomor dan rekening ke Satgas PASTI OJK dan Kominfo.
 
-`SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID` dan `…_SECRET` dari Google Cloud Console (lihat §7).
+**Direktori call center sepuluh bank.** Untuk setiap bank tersedia nama resmi, hotline, nomor internasional, nomor WhatsApp resmi, dan catatan jam layanan. Contohnya Halo BCA 1500888 dengan WhatsApp resmi +62 811-1500-888, Mandiri Call 14000, dan Contact BRI 1500017. Bagian ini berguna karena penipu biasanya menghubungi korbannya lebih dahulu dan menyediakan nomor call center palsu; nomornya tidak diambil dari pemberi telepon, melainkan dari daftar ini. Setiap entri juga mengingatkan bahwa WhatsApp bank resmi selalu punya centang hijau.
 
----
+**Enam hotline nasional** dalam lima kategori: Penegakan Hukum Kepolisian (110), Otoritas Jasa Keuangan (157), Kementerian Komunikasi dan Informatika, Bank Sentral Republik Indonesia, dan Perlindungan Korban Kejahatan. Seluruhnya dapat langsung dihubungi dari halaman.
 
-## 5. Generate kunci worker browser & APK
+### 1.8 Meja moderasi
 
-Dua file ini tidak ada di repo dan tidak boleh kamu tulis manual. `browser-*` dan `analysis-worker` menerima kunci **turunan** dari `SERVICE_API_KEY` (HMAC-SHA256), supaya keduanya tidak pernah memegang kunci induk. `analysis-worker` menolak start kalau `FILE_WORKER_SERVICE_KEY` kosong.
+Console tim berada di `/admin`. Rute ini selalu menuju `/admin/login` lebih dahulu dan tidak pernah langsung membuka halaman belakangnya, karena moderator yang dikirim ke login warga akan kembali tanpa role-nya diperiksa. Akun yang bukan admin langsung dikeluarkan lagi dari sesi tersebut.
 
-Buka **PowerShell** (skripnya bukan Bash), dari folder `mitweek`:
+- `/admin/dasbor` menampilkan empat angka inti, yaitu akun baru, laporan nomor berbahaya, cerita warga, dan nomor berbeda dilaporkan; grafik garis pertumbuhan untuk angka yang dipilih; serta donut kategori laporan. Rentang waktu 7 hari, 1 bulan, 3 bulan, dan 1 tahun, masing-masing dibandingkan dengan periode sebelumnya. Seluruh angka dihitung di Postgres oleh satu fungsi dan diambil dengan satu panggilan, supaya tidak ada empat query yang hasilnya saling berbeda.
+- `/admin/laporan` adalah antrean laporan nomor dengan filter status dan pencarian. Satu baris memuat klaim, gambar bukti, dan data pelapor. Keputusan setujui, tolak, atau tandai spam dikirim apa adanya sebagai status ke layanan internal, dan satu persetujuan itulah yang menaikkan nomor ke daftar berbahaya.
+- `/admin/posting` adalah antrean cerita warga, tempat moderator menurunkan cerita yang melanggar tanpa menghapus tulisan pemiliknya.
+- Sesi yang menganggur satu jam dikembalikan ke pintu masuk beserta alasannya, sehingga moderator tahu mengapa ia keluar.
 
-```powershell
-Set-Location infra
+### 1.9 Batas teknis
 
-$workspace = (Resolve-Path "..").Path
-$lines = [System.IO.File]::ReadAllLines((Join-Path $workspace "analysis-service/.env"))
-$key = $lines | Where-Object { $_ -match '^SERVICE_API_KEY=' }
-if (@($key).Count -ne 1) { throw "Expected one SERVICE_API_KEY in analysis-service/.env" }
-$raw = $key[0].Substring('SERVICE_API_KEY='.Length)
-function New-DerivedKey([string]$domain) {
-  $hmac = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($raw))
-  try { return -join ($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($domain)) | ForEach-Object { $_.ToString('x2') }) } finally { $hmac.Dispose() }
-}
-$browser = @("BROWSER_SERVICE_KEY=$(New-DerivedKey 'threatlens-browser-service')", 'BROWSER_MAX_RESPONSE_MB=20')
-$worker = @("FILE_WORKER_SERVICE_KEY=$(New-DerivedKey 'threatlens-file-service')", 'WORKER_MAX_CONCURRENCY=2', 'WORKER_MAX_BODY_MB=52', 'WORKER_APK_TIMEOUT_SECONDS=150')
-[System.IO.File]::WriteAllText((Join-Path $workspace "analysis-service/.env.browser"), ($browser -join [Environment]::NewLine) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-[System.IO.File]::WriteAllText((Join-Path $workspace "analysis-service/.env.worker"), ($worker -join [Environment]::NewLine) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-Remove-Variable raw
-```
+- Worker browser berjalan non-root, tanpa jaringan internet langsung dan tanpa jaringan backend. Seluruh akses keluar lewat proxy egress yang mem-pin DNS dan hanya mengizinkan HTTP dan HTTPS pada port 80 dan 443.
+- Worker APK memakai root filesystem read-only, tanpa rute internet sama sekali, dengan batas CPU, memori, dan jumlah proses. Worker ini hanya mengambil bukti; seluruh keputusan risiko berada di `analysis-service`.
+- Worker browser dan APK menerima kunci turunan HMAC dari `SERVICE_API_KEY`, bukan kunci induknya.
+- Batas layanan: enam scan per menit, empat puluh scan per jam, dan dua belas scan APK per jam. APK mendapat kuota tersendiri karena satu pemindaian jauh lebih mahal. Ukuran unggahan maksimal 50 MB.
+- Sesi keluar otomatis setelah satu jam tanpa aktivitas, dengan batas keras 24 jam. Callback OAuth tidak memicu logout mendadak.
+- `next.config.ts` mengirim CSP, HSTS, `nosniff`, `Referrer-Policy`, `frame-ancestors 'none'`, dan Permissions-Policy. Log Python melewati filter yang menutup API key, JWT, rahasia 64 hex, bearer token, dan DSN database sebelum ditulis.
+- Ikon dibundel di dalam aplikasi, tidak diambil dari API pihak ketiga, sehingga halaman tetap tampil utuh tanpa koneksi keluar.
+- Berkas yang kedaluwarsa dihapus oleh tugas latar: objek di Storage lebih dahulu, lalu barisnya. Intervalnya dapat diatur.
 
-Hasilnya dua file baru: `analysis-service/.env.browser` dan `analysis-service/.env.worker`. **Ulangi langkah ini setiap kali kamu mengganti `SERVICE_API_KEY`** — kalau tidak, scan URL dan APK langsung gagal dengan error 401 internal.
+### 1.10 Bagian yang tidak dibuat
 
----
-
-## 6. Jalankan migrasi database (langkah yang paling sering terlewat)
-
-Database-nya project Supabase-mu. Skema dan fungsi agregat berada di `infra/supabase/migrations/` dan **harus dijalankan satu per satu sesuai urutan nama file** — nomornya adalah urutannya.
-
-| File | Kalau tidak dijalankan |
-|---|---|
-| `202610300001_initial_schema.sql` | tidak ada apa pun |
-| `202610300002_langgraph_schema.sql` | checkpoint agen tidak tersedia |
-| `202610300004_phone_reports_trust.sql` | laporan ganda lolos, hanya ditahan pengecekan aplikasi |
-| `202610300005_phone_reports_note.sql` | catatan laporan tidak tersimpan (`note_saved: false`) |
-| `202611040006_phone_reports_evidence.sql` | **setiap laporan nomor ditolak `503`**, gambar terhapus lagi |
-| `202611040007_community_posts.sql` | papan warga 503, cerita baru ditolak |
-| `202611060008_scan_evidence_items.sql` | item bukti scan tidak tersimpan |
-| `202611070001_admin_roles.sql` | tidak ada akun admin → `/admin` selalu ditolak |
-| `202611090009_dangerous_numbers_single_approval.sql` | daftar "Nomor berbahaya" masih pakai ambang lama |
-| `202611100010_admin_desk_stats.sql` | **`/admin/dasbor` menampilkan "Angka dasbor belum bisa diambil"** |
-
-### Cara A — Supabase SQL Editor (paling mudah)
-
-Supabase Dashboard → **SQL Editor** → buka file migrasi → paste isinya → **Run**, mulai dari `0001` sampai `0010`. Setelah selesai, jalankan ini satu kali supaya PostgREST melihat fungsi baru:
-
-```sql
-select pg_notify('pgrst', 'reload schema');
-```
-
-Kalau langkah ini dilewat, `admin_desk_stats()` sudah ada di database tapi PostgREST masih menjawab `404`, dan dasbor tetap error.
-
-### Cara B — Supabase CLI
-
-```bash
-cd infra
-supabase login
-supabase link --project-ref PROJEK_REF_MU
-supabase db push
-```
-
-Cek cepat bahwa yang penting benar-benar ada, jalankan di SQL Editor:
-
-```sql
-select to_regprocedure('public.admin_desk_stats(text)') as fungsi_sudah_ada;
-select count(*) as jumlah_cerita from public.community_posts;
-```
-
----
-
-## 7. Konfigurasi auth Supabase
-
-**URL aplikasi.** Supabase → Authentication → URL Configuration:
-- Site URL: `http://localhost:3000`
-- Redirect URLs: `http://localhost:3000/auth/callback`
-
-**Google OAuth.** Google Cloud Console → buat **OAuth client ID tipe Web**, tambahkan `https://<project-ref>.supabase.co/auth/v1/callback` ke *Authorized redirect URIs*. Masukkan client ID + secret ke `infra/supabase/.env` (§4), lalu terapkan ke Supabase dari folder `infra`:
-
-```powershell
-Set-Location infra
-.\supabase\apply-auth-config.ps1 -Preview   # lihat dulu apa yang akan diubah
-.\supabase\apply-auth-config.ps1            # terapkan
-```
-
-**Akun admin (meja moderasi).** Login `/admin/login` memakai **email + password**, bukan Google. Jadi buat akun khusus untuk moderator, lalu angkat role-nya:
-
-1. Supabase → Authentication → Users → **Add user** → email + password, *Auto Confirm User* dicentang.
-2. Buka SQL Editor dan jalankan (ganti email dengan akun tadi):
-
-```sql
-update public.profiles
-   set role = 'admin'
- where id = (select id from auth.users where email = 'moderator@contoh.id');
-
-select id, role from public.profiles where role = 'admin';
-```
-
-Baris terakhir harus mengembalikan akunmu. Kalau kosong, `/admin` akan langsung melempar kamu keluar lagi.
-
----
-
-## 8. Nyalakan stack-nya
-
-Dari folder `mitweek`:
-
-```bash
-docker compose -f infra/docker-compose.yml up --build -d
-```
-
-Build pertama mengambil image Chromium dan menaruh dependensi Python/Go/Node di dalam container, jadi **bisa 10–20 menit**. Pantau dengan:
-
-```bash
-docker compose -f infra/docker-compose.yml ps
-```
-
-Tujuh service harus naik; lima di antaranya ditandai `(healthy)`:
-
-| Service | Peran |
-|---|---|
-| `frontend` | Next.js di `http://localhost:3000` |
-| `go-api` | API publik di `http://localhost:8080` — satu-satunya yang bisa disentuh browser selain frontend |
-| `analysis-service` | Orkestrasi agen + risk engine (hanya di network internal, tidak dipublikasikan) |
-| `browser-gateway` / `browser-worker` / `browser-egress` | Chromium terisolasi + proxy keluar |
-| `analysis-worker` | Analisis APK statis, tanpa internet |
-
-**Cloudinary — jebakan yang nyata.** SDK Cloudinary hanya membaca `CLOUDINARY_URL` **kalau `CLOUDINARY_CLOUD_NAME` tidak diset**. Proyek ini menyetel keduanya, dan nama cloud di URL harus sama dengan `CLOUDINARY_CLOUD_NAME` (host `dlwbthmsn0` salah; yang benar `wbthmsn0` — jangan ikut prefiks `d`). Kalau upload bukti gagal, laporan **ditolak** `503 evidence_unavailable` dan baris database tidak dibuat — itu memang disengaja, bukan bug.
-
----
-
-## 9. Bukti bahwa stack-mu benar-benar jalan
-
-Jalankan berurutan. Semua langkah ini harus hijau sebelum kamu bilang "sudah jalan".
-
-1. **Halaman terbuka** — `http://localhost:3000` menampilkan landing page, dan **ikon-ikonnya muncul** (kalau kotak kosong, lihat §11).
-2. **Login warga** — tombol masuk mengarah ke Google dan kamu kembali ke `/recognize` tanpa error.
-3. **Pemeriksaan tautan** — tab Tautan, masukkan satu URL yang jelas aman. Loading selesai di `/recognize`, lalu halaman pindah sendiri ke `/recognize/url/<scan_id>`. Buka tautan itu langsung dengan Ctrl+Shift+R — hasilnya harus tetap ada, tidak menjalankan scan ulang.
-4. **Pemeriksaan nomor** — tab Telepon, cari `+62` yang pernah dilaporkan. Halaman `/recognize/phone/<nomor>` harus menampilkan "Kata warga" kalau ada laporannya.
-5. **Laporan nomor** — `/community/phone` → kirim laporan dengan gambar. Kalau balik ke form dan tidak muncul error tapi laporannya tidak ada, hampir pasti migrasi `0006` belum jalan.
-6. **Papan warga** — `/community/latest`, buat satu cerita dengan gambar, vote, dan komentari. Buka `/community/latest` di tab lain sebagai akun kedua untuk memastikan komentar tampil.
-7. **Meja moderasi** — `http://localhost:3000/admin/login`, masuk dengan akun admin. `/admin/dasbor` harus menampilkan angka (bukan kartu error), grafik garis berubah saat kamu klik kartu metrik, dan filter rentang mengubah label sumbu. Lalu `/admin/laporan` → setujui laporan dari langkah 5, dan cek nomor itu muncul di tab "Nomor berbahaya".
-8. **Kesehatan internal** — dari laptop:
-
-```bash
-curl -s -H "X-Service-Key: <SERVICE_API_KEY kamu>" http://localhost:8080/internal/v1/metrics
-```
-
-Harus mengembalikan JSON berisi counter (`scans_created`, `jobs_completed`, dst) dan store aktif (`pgx` atau `postgrest`).
-
----
-
-## 10. Menjalankan tanpa Docker (untuk develop)
-
-Container tetap dipakai untuk `analysis-service`. Untuk mengubah kode frontend/backend sambil melihat hasilnya:
-
-```bash
-# terminal 1 — Go API di host, membaca backend/.env
-cd backend && go run .
-
-# terminal 2 — Next.js dev di host, membaca frontend/.env
-cd frontend && npm install && npm run dev
-```
-
-`NEXT_PUBLIC_API_BASE_URL` sudah menunjuk ke `http://localhost:8080`, jadi frontend dev bisa memakai `go-api` yang jalan di host maupun di container. Jangan lupa `docker compose -f infra/docker-compose.yml stop go-api frontend` supaya port tidak rebutan.
-
-Perintah pemeriksaan sebelum commit:
-
-```bash
-(cd backend && go test ./...)
-(cd analysis-service && python -m pytest)
-(cd frontend && npm install && npm run icons && npm run lint && npx tsc --noEmit && npm run build)
-docker compose -f infra/docker-compose.yml config --quiet
-```
-
----
-
-## 11. Kalau ada yang tidak jalan
-
-| Gejala | Penyebab & perbaikan |
-|---|---|
-| `/admin/dasbor` menampilkan "Angka dasbor belum bisa diambil" | Migrasi `202611100010` belum jalan, **atau** sudah jalan tapi PostgREST belum reload schema. Jalankan `select pg_notify('pgrst', 'reload schema');`. Kalau masih gagal, cek log: `docker compose -f infra/docker-compose.yml logs go-api \| grep "desk stats"` — baris itu menyebut penyebab aslinya. |
-| Semua laporan nomor → `503` | Migrasi `0006` belum diterapkan. |
-| Papan warga → `503 service_unavailable` | Migrasi `0007` belum diterapkan. |
-| `/admin/login` melempar kamu keluar lagi | Akun belum di-`role = 'admin'` (lihat §7), atau kolom role belum ada karena `202611070001` belum jalan. |
-| Login warga gagal di callback | Site URL / Redirect URL Supabase belum `http://localhost:3000` dan `…/auth/callback`. |
-| Scan URL selalu "bukti belum cukup" | `BROWSER_EGRESS_PROXY_URL` dan `--host-resolver-rules` harus menunjuk **satu nilai yang sama** (`http://browser-egress:8888`). Kalau beda subnet, tiap halaman mati dengan `ERR_PROXY_CONNECTION_FAILED` dan verdict-nya tetap terlihat normal. Jangan tulis IP subnetnya di kode. |
-| `analysis-worker` tidak mau start | `analysis-service/.env.worker` belum dibuat — ulangi §5. Log-nya menyebut cara memperbaikinya. |
-| Upload bukti / screenshot gagal senyap | Nama cloud di `CLOUDINARY_URL` tidak sama dengan `CLOUDINARY_CLOUD_NAME` (lihat §8). |
-| Semua ikon tampil kosong | Tambahkan ikon baru tanpa menjalankan `npm run icons`. Ikon dibundel offline, bukan diambil dari API Iconify. |
-| `docker compose up` langsung gagal | Salah satu `.env` belum dibuat (§4). Compose menolak kalau `env_file` tidak ada. |
-| Port 3000/8080 sudah dipakai | Hentikan proses lain, atau `docker compose -f infra/docker-compose.yml down` lalu naikkan lagi. |
-
----
-
-## 12. Struktur & dokumentasi lanjutan
-
-```text
-frontend/          src/app (rute) · src/components (UI per area) · src/lib (typenya API) · src/hooks
-backend/           main.go (rute) · admin.go (meja moderasi) · community.go · store.go (Postgres/PostgREST)
-analysis-service/  app/scanners.py · app/graph (LangGraph url/phone/application) · app/risk.py · app/brand_guard.py
-infra/             docker-compose.yml · supabase/migrations · docs/API_Contracts.md
-```
-
-- `infra/docs/API_Contracts.md` — setiap batas HTTP: rute publik, rute internal dengan service key, dan bentuk body-nya.
-- `infra/README.md` — keputusan desain per subsistem, termasuk ambang risiko dan alasan tiap batasan.
-- `PANDUAN_SETUP_TIM.md` — versi pendek dokumen ini, khusus langkah setup.
+- Pencarian nama pemilik nomor dan integrasi layanan seperti GetContact. Keduanya menuntut akun atau kredensial pada layanan pihak ketiga yang klausulnya melarang pemakaian tersebut, dan akan menyimpan data pribadi orang lain tanpa dasar hukum. ThreatLens melaporkan bahwa sebuah nomor sudah ditandai orang lain, bukan bahwa nomor itu milik seseorang.
+- Emulator untuk menjalankan APK. Kami tidak mengirim emulator. Jika sandbox analisis dinamis tidak disediakan, scan mencatat `dynamic_analysis` sebagai pemeriksaan yang tidak tersedia, tidak berpura-pura memiliki cakupan runtime.
+- Moderasi otomatis. Keputusan yang menaikkan risiko sebuah nomor selalu diambil oleh manusia.
