@@ -1,8 +1,8 @@
 # ThreatLens
 
-Deteksi penipuan untuk nomor, tautan, dan aplikasi Android — dikhususkan untuk nomor Indonesia (`+62`), dengan papan cerita warga dan meja moderasi.
+ThreatLens adalah web berbasis komunitas seputar keamanan digital yang memeriksa nomor telepon, tautan, aplikasi Android yang dipakai penipu (khusus untuk nomor Indonesia), Media edukasi terkait penipuan digital, dan komunitas untuk berbagi pengalamannya terkait penipuan digital dan pelaporan nomor berbahaya. Hasil pemeriksaan mesin digabungkan dengan laporan warga, dan keduanya hanya naik menjadi peringatan resmi setelah admin menyetujuinya.
 
-Empat repo, dijalankan jadi satu stack dengan Docker Compose.
+Proyek terdiri dari empat repo yang dijalankan menjadi satu stack dengan Docker Compose. Dokumen ini menjelaskan dua hal: apa saja yang dibangun, dan bagaimana menjalankannya di komputer lokal sampai benar-benar berfungsi.
 
 ---
 
@@ -26,7 +26,7 @@ ThreatLens menjawab satu pertanyaan: apakah pihak yang baru menghubungi kita itu
 
 **Tautan.** Halaman dibuka dengan Chromium di dalam worker terpisah, jadi yang dinilai adalah halaman yang benar-benar tampil, bukan perkiraan dari teks URL. Yang dibandingkan adalah host awal dengan host akhir setelah redirect, action form yang menuju domain lain, halaman yang memakai nama brand di bawah domain asing, dan metadata halaman. Temuan tersebut digabung dengan reputasi eksternal (Google Safe Browsing, VirusTotal, IC4, Malwarebytes) lalu dibaca agen LLM dengan batas tetap: dua ronde panggilan tool dan maksimal enam tool yang benar-benar dieksekusi untuk satu pemeriksaan. Jika redirect berpindah domain, dilakukan satu pemeriksaan tambahan ke tujuan tersebut dan ke action form lintas domain, maksimal dua target, tanpa membuka sesi browser kedua.
 
-**APK.** Berkas diperiksa secara statis dan tidak pernah dijalankan. Pertama dihitung SHA-256-nya, lalu reputasi hash ditanyakan ke VirusTotal, itu pun hanya jika pengguna mencentang izin unggah ke layanan eksternal. Sebelum isi arsip dibongkar, dijalankan pemeriksaan zip-bomb: jumlah entri, ukuran tiap entri, total ukuran setelah解压, dan rasio kompresi. Setelah itu Androguard mengambil izin dan kode, dan aturan deterministik menggabungkannya, antara lain izin SMS yang berdampingan dengan aksesibilitas atau kemampuan instalasi overlay, token bot Telegram yang tertanam di berkas, ikon launcher yang disembunyikan, dan petunjuk penggunaan packer. Nama paket dan domain yang tertulis di dalam APK ikut dibandingkan dengan daftar brand resmi.
+**APK.** Berkas diperiksa secara statis dan tidak pernah dijalankan. Pertama dihitung SHA-256-nya, lalu reputasi hash ditanyakan ke VirusTotal, itu pun hanya jika pengguna mencentang izin unggah ke layanan eksternal. Sebelum isi arsip dibongkar, dijalankan pemeriksaan zip-bomb: jumlah entri, ukuran tiap entri, total ukuran setelah diekstrak, dan rasio kompresi. Setelah itu Androguard mengambil izin dan kode, dan aturan deterministik menggabungkannya, antara lain izin SMS yang berdampingan dengan aksesibilitas atau kemampuan instalasi overlay, token bot Telegram yang tertanam di berkas, ikon launcher yang disembunyikan, dan petunjuk penggunaan packer. Nama paket dan domain yang tertulis di dalam APK ikut dibandingkan dengan daftar brand resmi.
 
 **Nomor telepon.** Hanya nomor Indonesia yang dilayani. Normalisasi ke E.164 dilakukan satu kali oleh Python; Go API menyimpan hasil hitung tersebut dan tidak menyalin aturannya sendiri. Angka `0` setelah `62` dibuang di ketiga bahasa, sehingga `0812…`, `62812…`, dan `+62 0812…` menunjuk ke alamat yang sama. Pemeriksaan melihat bentuk nomor premium seperti 0900, yang biasa dipakai pada modus telepon tak dikenal yang menagih, lalu mengambil laporan warga atas nomor tersebut. Bagian "Kata warga" menampilkan kategori, status, dan umur laporan, maksimal 20 entri, tanpa menampilkan identitas pelapor.
 
@@ -34,14 +34,14 @@ Pemeriksaan nomor tidak pernah menyimpulkan sebuah nomor aman. Tidak ada dasar d
 
 ### 1.2 Cara vonis ditetapkan
 
-Bagian ini yang paling sering membuat produk sejenis kehilangan kepercayaan, yaitu quando mesin menyatakan aman tanpa bukti.
+Bagian ini yang paling sering membuat produk sejenis kehilangan kepercayaan, yaitu ketika mesin menyatakan aman tanpa bukti.
 
 | Vonis | Kondisi | Tindakan yang disarankan |
 |---|---|---|
 | **BERBAHAYA** (`confirmed_threat`, level tinggi) | Satu sumber reputasi independen menyatakan berbahaya | Jangan buka tautan dan jangan berikan data apa pun. Blokir dan laporkan |
 | **WASPADA** (`suspicious`, level tinggi) | Temuan tinggi yang didukung sumber non-model, atau beberapa temuan sedang | Jangan masukkan kredensial. Verifikasi lewat kanal resmi |
 | **WASPADA** (`suspicious`, level sedang) | Ada temuan sedang, belum cukup untuk naik level | Verifikasi sebelum bertindak |
-| **AMAN** (`low`) | Minimal dua sumber independen yang检查结果 bersih dan tidak ada temuan sedang ke atas | Tidak ada sinyal bahaya, tetapi tetap berhati-hati |
+| **AMAN** (`low`) | Minimal dua sumber independen yang hasilnya bersih dan tidak ada temuan sedang ke atas | Tidak ada sinyal bahaya, tetapi tetap berhati-hati |
 | **BUKTI BELUM CUKUP** (`insufficient_evidence`, level `unknown`) | Selain kondisi di atas | Jangan ambil kesimpulan |
 
 Empat aturan menjaga tabel di atas:
@@ -95,17 +95,17 @@ Jalur ini adalah satu-satunya yang dapat menempatkan sebuah nomor ke daftar berb
 - Semua laporan mulai pada status `pending`. Sebuah klaim tidak menaikkan risiko sampai moderator membaca laporannya beserta gambarnya.
 - Nomor masuk daftar berbahaya setelah satu laporan disetujui. Yang menjadi ambang adalah keputusan manusia yang memeriksa bukti, bukan jumlah pelapor. Pelapor tidak dapat menaikkan laporannya sendiri, dan warga yang benar tidak perlu menunggu orang asing kedua kebetulan melaporkan nomor yang sama.
 - Kolom catatan untuk pelapor dibatasi 280 karakter dan hanya dibaca moderator. Isinya tidak dikirim ke LLM dan tidak ditampilkan ke pengguna lain.
-- Berkti disimpan pada folder dengan akhiran acak, sehingga URL bukti tidak dapat dijelajahi. Penghapusan memanggil CDN invalidate; secara terukur URL yang sama berubah menjadi 404 dalam 30 detik.
+- Bukti disimpan pada folder dengan akhiran acak, sehingga URL bukti tidak dapat dijelajahi. Penghapusan memanggil CDN invalidate; secara terukur URL yang sama berubah menjadi 404 dalam 30 detik.
 
 Batas penulisan: sepuluh laporan per jam per akun.
 
 ### 1.6 Modul edukasi
 
-Delapan simulasi percakapan penipuan tersedia di `/learn`. Setiap skenario dibuka sebagai percakapan dengan tampilan pesan instan: gelembung pesan, header, bilah input, latar coretan, dan lampiran yang dapat disentuh langsung. Pilihannya bercabang, pihak lawan memberi reaksi atas balasan yang dipilih, dan tiap keputusan dinilai.
+Delapan simulasi percakapan penipuan tersedia di `/learn`. Setiap skenario dibuka sebagai percakapan dengan tampilan aplikasi pesan: balon pesan, header, bilah input, latar coretan, dan lampiran yang dapat disentuh langsung. Pilihannya bercabang, pihak lawan memberi reaksi atas balasan yang dipilih, dan tiap keputusan dinilai.
 
 | Skenario | Modus yang dilatih |
 |---|---|
-| Percakapan dengan Kurir J&T Palsu | Lampiran APK berkedok resi paket; berkas APK-nya benar-benar tampil sebagai lampiran di gelembung pesan |
+| Percakapan dengan Kurir J&T Palsu | Lampiran APK berkedok resi paket; berkas APK-nya benar-benar tampil sebagai lampiran di dalam percakapan |
 | Panggilan CS Bank BCA Palsu | Perubahan tarif yang meminta pengguna pindah ke kanal resmi palsu |
 | Undangan Pernikahan Teman Lama | Tautan undangan yang meminta nomor dan kode verifikasi |
 | Teror Salah Transfer Pinjol Ilegal | Utang fiktif disertai ancaman menyebarkan data |
@@ -156,3 +156,334 @@ Console tim berada di `/admin`. Rute ini selalu menuju `/admin/login` lebih dahu
 - Pencarian nama pemilik nomor dan integrasi layanan seperti GetContact. Keduanya menuntut akun atau kredensial pada layanan pihak ketiga yang klausulnya melarang pemakaian tersebut, dan akan menyimpan data pribadi orang lain tanpa dasar hukum. ThreatLens melaporkan bahwa sebuah nomor sudah ditandai orang lain, bukan bahwa nomor itu milik seseorang.
 - Emulator untuk menjalankan APK. Kami tidak mengirim emulator. Jika sandbox analisis dinamis tidak disediakan, scan mencatat `dynamic_analysis` sebagai pemeriksaan yang tidak tersedia, tidak berpura-pura memiliki cakupan runtime.
 - Moderasi otomatis. Keputusan yang menaikkan risiko sebuah nomor selalu diambil oleh manusia.
+
+---
+
+## 2. Yang perlu disiapkan
+
+Stack ini berjalan di komputer lokal, tetapi tidak sepenuhnya offline. Database, auth, penyimpanan berkas, dan model bahasa berada di layanan pihak ketiga.
+
+| Layanan | Kegunaan | Kondisi |
+|---|---|---|
+| Supabase (proyek hosted) | Database, auth, Storage | Wajib |
+| OpenAI | Agen pemeriksa tautan dan APK | Wajib untuk deteksi |
+| Cloudflare Turnstile | Anti-bot pada form login | Wajib untuk login |
+| Google OAuth | Login warga | Wajib untuk login |
+| Cloudinary | Penyimpanan gambar bukti laporan dan cerita | Wajib jika akan melapor atau posting |
+| Safe Browsing, VirusTotal, IC4, Malwarebytes, Exa, MobSF, sandbox dinamis | Sumber reputasi tambahan | Opsional. Yang tidak diisi hanya dilaporkan sebagai pemeriksaan yang tidak tersedia |
+
+Di komputer lokal: Docker Desktop dalam keadaan berjalan, dan Git. Untuk menjalankan tes di luar container diperlukan Node.js 20+, Go 1.23+, dan Python 3.10+.
+
+---
+
+## 3. Mengambil kode
+
+Keempat repo harus berada sejajar di dalam satu folder induk, tidak bersarang dan tidak sebagai submodule. `docker-compose.yml` memakai path `../frontend`, `../backend`, dan `../analysis-service`, jadi posisi folder menentukan apakah build berhasil.
+
+```bash
+mkdir mitweek
+cd mitweek
+
+git clone https://github.com/MITWEEK-inponamatim/infra.git
+git clone https://github.com/MITWEEK-inponamatim/frontend.git
+git clone https://github.com/MITWEEK-inponamatim/backend.git
+git clone https://github.com/MITWEEK-inponamatim/analysis-service.git
+```
+
+Bentuk akhirnya:
+
+```text
+mitweek/
+├── infra/              # compose, migrasi Supabase, dokumentasi
+├── frontend/           # Next.js 16 dan React 19
+├── backend/            # Go API
+└── analysis-service/   # Python: agen deteksi, LangGraph, worker browser dan APK
+```
+
+---
+
+## 4. Membuat file .env
+
+Ada empat file contoh. Docker Compose berhenti lebih dahulu jika salah satu `.env` belum ada, jadi buat semuanya sebelum menjalankan.
+
+```bash
+cp frontend/.env.example           frontend/.env
+cp backend/.env.example            backend/.env
+cp analysis-service/.env.example   analysis-service/.env
+cp infra/supabase/.env.example     infra/supabase/.env
+```
+
+Semua `.env` sudah di-ignore oleh Git. Yang di-commit hanya `.env.example`.
+
+### `frontend/.env`
+
+| Variabel | Nilai |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | URL proyek Supabase |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | publishable key |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | site key Turnstile |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8080` |
+| `NEXT_PUBLIC_IDLE_TIMEOUT_SECONDS` | `3600` |
+
+### `backend/.env`
+
+| Variabel | Nilai |
+|---|---|
+| `SUPABASE_URL` | sama dengan yang di frontend |
+| `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWT_SECRET` | Supabase, Settings, API |
+| `TURNSTILE_SECRET_KEY` | secret key Turnstile |
+| `TURNSTILE_EXPECTED_HOSTNAME` | `localhost` |
+| `SERVICE_API_KEY` | bebas, asal panjang. Wajib sama persis dengan di `analysis-service/.env` |
+| `PRE_COOKIE_SECRET` | bebas, asal panjang. Dipakai untuk membentuk alias penulis |
+| `DATABASE_URL` | boleh kosong. Jika terisi, Go membaca Postgres lewat pgx; jika kosong, lewat PostgREST. Keduanya berjalan |
+| `DATABASE_URL_SESSION` | tidak dipakai di sisi Go |
+| Sisa variabel | punya default di kode, biarkan seperti contoh |
+
+### `analysis-service/.env`
+
+| Variabel | Nilai |
+|---|---|
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | sama dengan yang di backend |
+| `SERVICE_API_KEY` | sama persis dengan yang di backend |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | kunci dan model agen |
+| `CLOUDINARY_URL`, `CLOUDINARY_CLOUD_NAME` | lihat catatan Cloudinary pada bagian 8 |
+| `DATABASE_URL_SESSION` | kolom `connectionString` pada Supabase, Settings, Database. Boleh kosong; jika kosong, checkpoint LangGraph dilaporkan tidak tersedia dan analisis tetap jalan |
+| `SAFE_BROWSING_API_KEY`, `VIRUSTOTAL_API_KEY`, `EXA_API_KEY`, `MOBSF_URL`, `MOBSF_API_KEY`, `DYNAMIC_ANALYSIS_URL` | opsional |
+
+### `infra/supabase/.env`
+
+`SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID` dan `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET` dari Google Cloud Console, seperti pada bagian 7.
+
+---
+
+## 5. Membuat kunci turunan worker
+
+Dua file berikut tidak ada di repo dan tidak perlu ditulis manual. Worker browser dan worker APK menerima kunci turunan dari `SERVICE_API_KEY` berupa HMAC-SHA256, supaya keduanya tidak pernah memegang kunci induk. `analysis-worker` menolak start jika `FILE_WORKER_SERVICE_KEY` kosong.
+
+Jalankan di **PowerShell**, dari folder `mitweek`:
+
+```powershell
+Set-Location infra
+
+$workspace = (Resolve-Path "..").Path
+$lines = [System.IO.File]::ReadAllLines((Join-Path $workspace "analysis-service/.env"))
+$key = $lines | Where-Object { $_ -match '^SERVICE_API_KEY=' }
+if (@($key).Count -ne 1) { throw "Expected one SERVICE_API_KEY in analysis-service/.env" }
+$raw = $key[0].Substring('SERVICE_API_KEY='.Length)
+function New-DerivedKey([string]$domain) {
+  $hmac = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($raw))
+  try { return -join ($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($domain)) | ForEach-Object { $_.ToString('x2') }) } finally { $hmac.Dispose() }
+}
+$browser = @("BROWSER_SERVICE_KEY=$(New-DerivedKey 'threatlens-browser-service')", 'BROWSER_MAX_RESPONSE_MB=20')
+$worker = @("FILE_WORKER_SERVICE_KEY=$(New-DerivedKey 'threatlens-file-service')", 'WORKER_MAX_CONCURRENCY=2', 'WORKER_MAX_BODY_MB=52', 'WORKER_APK_TIMEOUT_SECONDS=150')
+[System.IO.File]::WriteAllText((Join-Path $workspace "analysis-service/.env.browser"), ($browser -join [Environment]::NewLine) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText((Join-Path $workspace "analysis-service/.env.worker"), ($worker -join [Environment]::NewLine) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+Remove-Variable raw
+```
+
+Hasilnya `analysis-service/.env.browser` dan `analysis-service/.env.worker`. Ulangi langkah ini setiap kali `SERVICE_API_KEY` diganti. Jika tidak, scan URL dan APK gagal dengan error 401 internal.
+
+---
+
+## 6. Menjalankan migrasi database
+
+Ini langkah yang paling sering terlewat, dan tanpa langkah ini ada fitur yang tampak rusak padahal datanya belum ada. Skema berada di `infra/supabase/migrations/` dan dijalankan satu per satu sesuai urutan nama file.
+
+| File | Jika belum dijalankan |
+|---|---|
+| `202610300001_initial_schema.sql` | Tidak ada satu pun fungsi yang bekerja |
+| `202610300002_langgraph_schema.sql` | Checkpoint agen tidak tersedia |
+| `202610300004_phone_reports_trust.sql` | Laporan ganda hanya ditahan pemeriksaan aplikasi |
+| `202610300005_phone_reports_note.sql` | Catatan laporan tidak tersimpan, jawaban `note_saved: false` |
+| `202611040006_phone_reports_evidence.sql` | Setiap laporan nomor ditolak `503`, gambar yang sudah terunggah dihapus lagi |
+| `202611040007_community_posts.sql` | Papan warga menjawab 503, cerita baru ditolak |
+| `202611060008_scan_evidence_items.sql` | Item bukti scan tidak tersimpan |
+| `202611070001_admin_roles.sql` | Tidak ada akun admin, `/admin` selalu menolak |
+| `202611090009_dangerous_numbers_single_approval.sql` | Daftar Nomor berbahaya masih memakai ambang lama |
+| `202611100010_admin_desk_stats.sql` | `/admin/dasbor` menampilkan "Angka dasbor belum bisa diambil" |
+
+### Cara pertama, lewat Supabase SQL Editor
+
+Buka Supabase Dashboard, masuk ke SQL Editor, lalu jalankan isi setiap file dari `0001` sampai `0010` berturut-turut. Setelah selesai, jalankan satu perintah ini agar PostgREST melihat fungsi baru:
+
+```sql
+select pg_notify('pgrst', 'reload schema');
+```
+
+Tanpa perintah terakhir, `admin_desk_stats()` sudah ada di database tetapi PostgREST masih menjawab 404, dan dasbor tetap menampilkan error.
+
+### Cara kedua, lewat Supabase CLI
+
+```bash
+cd infra
+supabase login
+supabase link --project-ref PROJECT_REF_ANDA
+supabase db push
+```
+
+Pemeriksaan singkat setelahnya, jalankan di SQL Editor:
+
+```sql
+select to_regprocedure('public.admin_desk_stats(text)') as fungsi_sudah_ada;
+select count(*) as jumlah_cerita from public.community_posts;
+```
+
+---
+
+## 7. Konfigurasi auth
+
+### URL aplikasi
+
+Supabase, Authentication, URL Configuration:
+
+- Site URL: `http://localhost:3000`
+- Redirect URLs: `http://localhost:3000/auth/callback`
+
+### Google OAuth
+
+Di Google Cloud Console, buat OAuth client ID tipe Web, lalu tambahkan `https://<project-ref>.supabase.co/auth/v1/callback` ke Authorized redirect URIs. Masukkan client ID dan secret ke `infra/supabase/.env`, kemudian terapkan dari folder `infra`:
+
+```powershell
+Set-Location infra
+.\supabase\apply-auth-config.ps1 -Preview
+.\supabase\apply-auth-config.ps1
+```
+
+Jalankan yang pertama lebih dahulu untuk melihat apa yang akan diubah.
+
+### Membuat akun moderator
+
+Login meja moderasi memakai email dan password, bukan Google, jadi moderator membutuhkan akun sendiri.
+
+1. Supabase, Authentication, Users, Add user. Isi email dan password, centang Auto Confirm User.
+2. Jalankan di SQL Editor, ganti email dengan akun yang baru dibuat:
+
+```sql
+update public.profiles
+   set role = 'admin'
+ where id = (select id from auth.users where email = 'moderator@contoh.id');
+
+select id, role from public.profiles where role = 'admin';
+```
+
+Perintah kedua harus menampilkan akun tersebut. Jika hasilnya kosong, `/admin/login` akan langsung mengeluarkan Anda lagi.
+
+---
+
+## 8. Menjalankan stack
+
+Dari folder `mitweek`:
+
+```bash
+docker compose -f infra/docker-compose.yml up --build -d
+```
+
+Build pertama mengambil image Chromium dan memasang dependensi Python, Go, dan Node.js di dalam container, jadi dapat memakan waktu 10 sampai 20 menit. Pantau keadaannya dengan:
+
+```bash
+docker compose -f infra/docker-compose.yml ps
+```
+
+Tujuh service harus naik, lima di antaranya berstatus healthy:
+
+| Service | Peran |
+|---|---|
+| `frontend` | Next.js pada `http://localhost:3000` |
+| `go-api` | API publik pada `http://localhost:8080`. Selain frontend, hanya inilah yang bisa dijangkau browser |
+| `analysis-service` | Orkestrasi agen dan risk engine, hanya di network internal |
+| `browser-gateway`, `browser-worker`, `browser-egress` | Chromium terisolasi beserta proxy keluarnya |
+| `analysis-worker` | Analisis APK statis, tanpa akses internet |
+
+Untuk menghentikan: `docker compose -f infra/docker-compose.yml down`. Untuk melihat log satu service: `docker compose -f infra/docker-compose.yml logs -f go-api`.
+
+Catatan Cloudinary. SDK membaca `CLOUDINARY_URL` hanya jika `CLOUDINARY_CLOUD_NAME` tidak diset. Proyek ini menyetel keduanya, jadi nama cloud pada URL harus sama dengan nilai `CLOUDINARY_CLOUD_NAME`; host `dlwbthmsn0` tidak valid, yang benar `wbthmsn0` tanpa awalan `d`. Kegagalan upload bukti membuat laporan ditolak dengan `503 evidence_unavailable` dan baris database tidak dibuat. Itu perilaku yang dirancang, bukan kerusakan.
+
+---
+
+## 9. Memastikan semuanya benar-benar berjalan
+
+Lakukan berurutan. Semua langkah ini harus berhasil sebelum stack dinyatakan siap.
+
+1. Buka `http://localhost:3000`. Halaman tampil dan ikon muncul. Jika kotaknya kosong, lihat bagian 11.
+2. Login warga lewat Google dan tiba di `/recognize` tanpa error.
+3. Periksa satu tautan yang jelas aman pada tab Tautan. Proses selesai di `/recognize`, lalu halaman berpindah sendiri ke `/recognize/url/<scan_id>`. Buka alamat itu dengan Ctrl+Shift+R; hasilnya harus tetap ada dan tidak menjalankan pemeriksaan ulang.
+4. Periksa satu nomor `+62` yang sudah pernah dilaporkan di tab Telepon. `/recognize/phone/<nomor>` harus menampilkan bagian Kata warga jika ada laporannya.
+5. Kirim satu laporan dari `/community/phone` beserta gambarnya. Jika kembali ke form tanpa pesan error tetapi laporan tidak muncul, hampir pasti migrasi `0006` belum dijalankan.
+6. Buat satu cerita di `/community/latest` dengan gambar, beri vote, dan komentari. Buka alamat yang sama pada tab lain dengan akun kedua untuk memastikan komentar tampil.
+7. Buka `/admin/login` dan masuk dengan akun moderator. `/admin/dasbor` harus menampilkan angka, bukan kartu error. Klik kartu metrik untuk memindahkan garis, dan ganti rentang untuk melihat label sumbu berubah.
+8. Setujui laporan dari langkah 5 lewat `/admin/laporan`, lalu pastikan nomor itu muncul di tab Nomor berbahaya pada `/community/phone`.
+9. Periksa kesehatan layanan dari komputer:
+
+```bash
+curl -s -H "X-Service-Key: ISI_SERVICE_API_KEY_ANDA" http://localhost:8080/internal/v1/metrics
+```
+
+Yang keluar adalah JSON berisi pencacah seperti `scans_created` dan `jobs_completed`, dan store aktif, `pgx` atau `postgrest`.
+
+---
+
+## 10. Berkembang tanpa container
+
+Container tetap dipakai untuk `analysis-service`. Untuk mengubah kode frontend atau backend sambil melihat hasilnya:
+
+```bash
+# terminal pertama, Go API di host, membaca backend/.env
+cd backend
+go run .
+
+# terminal kedua, Next.js dev di host, membaca frontend/.env
+cd frontend
+npm install
+npm run dev
+```
+
+`NEXT_PUBLIC_API_BASE_URL` menunjuk ke `http://localhost:8080`, jadi frontend dev bisa memakai Go API di host maupun di container. Hentikan dulu pasangan di container agar port tidak rebutan:
+
+```bash
+docker compose -f infra/docker-compose.yml stop go-api frontend
+```
+
+Periksa sebelum commit:
+
+```bash
+(cd backend && go test ./...)
+(cd analysis-service && python -m pytest)
+(cd frontend && npm install && npm run icons && npm run lint && npx tsc --noEmit && npm run build)
+docker compose -f infra/docker-compose.yml config --quiet
+```
+
+Perintah `npm run icons` tidak boleh dilewat. Ia menyusun ulang bundel ikon dari referensi yang ada di `src/`; ikon baru yang belum masuk bundel tampil kosong.
+
+---
+
+## 11. Jika ada yang tidak berjalan
+
+| Gejala | Penyebab dan perbaikan |
+|---|---|
+| `/admin/dasbor` menampilkan "Angka dasbor belum bisa diambil" | Migrasi `202611100010` belum dijalankan, atau sudah dijalankan tetapi PostgREST belum membaca ulang schema. Jalankan `select pg_notify('pgrst', 'reload schema');`. Jika masih gagal, periksa `docker compose -f infra/docker-compose.yml logs go-api` dan cari baris yang diawali `desk stats`; baris itu menyebut penyebab aslinya |
+| Semua laporan nomor berbalik `503` | Migrasi `0006` belum diterapkan |
+| Papan warga menjawab `503 service_unavailable` | Migrasi `0007` belum diterapkan |
+| `/admin/login` mengeluarkan Anda lagi | Akun belum berrole `admin` (bagian 7), atau kolom role belum ada karena `202611070001` belum diterapkan |
+| Login warga gagal di callback | Site URL dan Redirect URL Supabase belum `http://localhost:3000` dan `http://localhost:3000/auth/callback` |
+| Scan URL selalu menjawab bukti belum cukup | `BROWSER_EGRESS_PROXY_URL` dan `--host-resolver-rules` harus menunjuk satu nilai yang sama, `http://browser-egress:8888`. Jika keduanya berbeda subnet, setiap halaman mati dengan `ERR_PROXY_CONNECTION_FAILED` dan vonisnya tetap terlihat wajar. Jangan menulis IP subnet di kode, keduanya dibaca dari satu nilai |
+| `analysis-worker` tidak mau start | `analysis-service/.env.worker` belum dibuat, ulangi bagian 5. Log worker menyebutkan cara memperbaikinya |
+| Upload bukti atau screenshot gagal tanpa pesan | Nama cloud pada `CLOUDINARY_URL` tidak sama dengan `CLOUDINARY_CLOUD_NAME` (bagian 8) |
+| Semua ikon tampil kosong | Ikon baru ditambahkan tanpa `npm run icons`. Ikon dibundel lokal, tidak diambil dari API Iconify |
+| `docker compose up` gagal sebelum build | Salah satu `.env` belum dibuat. Compose menolak jika `env_file` tidak ditemukan |
+| Port 3000 atau 8080 sudah dipakai | Hentikan proses lain, atau jalankan `down` lalu naikkan kembali |
+| Scan nomor mengembalikan hasil kosong untuk nomor luar negeri | Bukan kerusakan. Layanan hanya menerima `+62`, dan untuk di luar itu pemeriksa menyatakan tidak bisa memeriksa, bukan menyatakan aman |
+
+---
+
+## 12. Struktur dan dokumen lanjutan
+
+```text
+frontend/          src/app (rute) · src/components (UI per area) · src/lib (tipe API) · src/hooks
+backend/           main.go (rute) · admin.go (meja moderasi) · community.go · store.go (Postgres dan PostgREST)
+analysis-service/  app/scanners.py · app/graph (LangGraph url, phone, application) · app/risk.py · app/brand_guard.py
+infra/             docker-compose.yml · supabase/migrations · docs/API_Contracts.md
+```
+
+- `infra/docs/API_Contracts.md`, daftar setiap batas HTTP: rute publik, rute internal dengan service key, dan bentuk body-nya.
+- `infra/README.md`, keputusan desain per subsistem beserta alasan tiap batasan.
+- `PANDUAN_SETUP_TIM.md`, versi pendek dari bagian setup di dokumen ini.
